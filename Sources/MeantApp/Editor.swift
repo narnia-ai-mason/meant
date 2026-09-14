@@ -81,11 +81,12 @@ enum Editor {
     var pid: pid_t = 0
     let target = AXUIElementGetPid(element, &pid) == .success ? pid : nil
     postKey(CGKeyCode(kVK_Delete), pid: target)
-    settle()
-    if copyString(element, kAXSelectedTextAttribute) == original {
-      return false
+    settle(0.08)
+    let inserted = replacement + trailingSpaces(original)
+    if isCollapsed(element), insertSelectedText(element, inserted) {
+      return true
     }
-    return paste(replacement + trailingSpaces(original), pid: target)
+    return paste(inserted)
   }
 }
 
@@ -182,19 +183,51 @@ private func clamped(_ utf16: Range<Int>, in text: String) -> Range<Int>? {
   return utf16
 }
 
-private func settle() {
-  RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+private func settle(_ seconds: TimeInterval = 0.03) {
+  RunLoop.current.run(until: Date().addingTimeInterval(seconds))
 }
 
-private func paste(_ text: String, pid: pid_t?) -> Bool {
+private func isCollapsed(_ element: AXUIElement) -> Bool {
+  guard let selected = selectedUTF16Range(element) else {
+    return true
+  }
+  return selected.count == 0
+}
+
+private func insertSelectedText(_ element: AXUIElement, _ text: String) -> Bool {
+  let before = readText(from: element)
+  guard setSelectedText(element, text) else {
+    return false
+  }
+  settle()
+  let after = readText(from: element)
+  return after != before && containsLiteral(after, text)
+}
+
+private func setSelectedText(_ element: AXUIElement, _ text: String) -> Bool {
+  AXUIElementSetAttributeValue(
+    element,
+    kAXSelectedTextAttribute as CFString,
+    text as CFTypeRef
+  ) == .success
+}
+
+private func containsLiteral(_ haystack: String, _ needle: String) -> Bool {
+  let ns = haystack as NSString
+  return [
+    needle,
+    needle.precomposedStringWithCanonicalMapping,
+    needle.decomposedStringWithCanonicalMapping,
+  ].contains { ns.range(of: $0).location != NSNotFound }
+}
+
+private func paste(_ text: String) -> Bool {
   let pasteboard = NSPasteboard.general
   let previous = pasteboard.string(forType: .string)
   pasteboard.clearContents()
   pasteboard.setString(text, forType: .string)
-  postKey(CGKeyCode(kVK_Command), pid: pid, downOnly: true)
-  postKey(CGKeyCode(kVK_ANSI_V), pid: pid, flags: .maskCommand)
-  postKey(CGKeyCode(kVK_Command), pid: pid, upOnly: true)
-  DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+  postCommandV()
+  DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
     pasteboard.clearContents()
     if let previous {
       pasteboard.setString(previous, forType: .string)
@@ -203,15 +236,31 @@ private func paste(_ text: String, pid: pid_t?) -> Bool {
   return true
 }
 
+private func postCommandV() {
+  let source = CGEventSource(stateID: .hidSystemState)
+  for down in [true, false] {
+    guard
+      let event = CGEvent(
+        keyboardEventSource: source,
+        virtualKey: CGKeyCode(kVK_ANSI_V),
+        keyDown: down
+      )
+    else {
+      continue
+    }
+    event.flags = .maskCommand
+    event.setIntegerValueField(.eventSourceUserData, value: MeantEvent.signature)
+    event.post(tap: .cghidEventTap)
+  }
+}
+
 private func postKey(
   _ key: CGKeyCode,
   pid: pid_t?,
-  flags: CGEventFlags = [],
-  downOnly: Bool = false,
-  upOnly: Bool = false
+  flags: CGEventFlags = []
 ) {
   let source = CGEventSource(stateID: .privateState)
-  func post(_ down: Bool, flags: CGEventFlags) {
+  func post(_ down: Bool) {
     guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else {
       return
     }
@@ -223,12 +272,8 @@ private func postKey(
       event.post(tap: .cghidEventTap)
     }
   }
-  if !upOnly {
-    post(true, flags: flags)
-  }
-  if !downOnly {
-    post(false, flags: flags)
-  }
+  post(true)
+  post(false)
 }
 
 private func readText(from element: AXUIElement) -> String {
