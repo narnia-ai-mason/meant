@@ -44,14 +44,10 @@ public struct Detector: Sendable {
     let core = parts.core
     guard core.count >= 4 else { return nil }
     let hangul = Converter.enToKo(core)
-    guard hangul != core, hangul.contains(where: Hangul.isLetter) else { return nil }
+    guard hangul != core else { return nil }
+    guard Hangul.shape(of: hangul).isComposedKorean else { return nil }
+    guard !english.contains(core) else { return nil }
     guard !isIgnored(hangul) else { return nil }
-    let sourceLooksWrong = !english.contains(core)
-    let destinationLooksRight = Hangul.shape(of: hangul).isComposedKorean
-    guard sourceLooksWrong || destinationLooksRight else { return nil }
-    if isCodeLike(core), !destinationLooksRight {
-      return nil
-    }
     return Suggestion(
       original: parts.joined,
       replacement: parts.wrapped(hangul),
@@ -117,26 +113,4 @@ struct TokenAffix {
   private static func isCore(_ character: Character) -> Bool {
     character.isLetter || Hangul.isLetter(character)
   }
-}
-
-private func isCodeLike(_ token: String) -> Bool {
-  if token.contains("_") || token.contains("@") || token.contains("/") {
-    return true
-  }
-  if token.contains(where: \.isNumber) {
-    return true
-  }
-  let letters = token.filter(\.isLetter)
-  if letters.count >= 2 && letters.allSatisfy(\.isUppercase) {
-    return true
-  }
-  var seenLower = false
-  for character in letters {
-    if character.isLowercase {
-      seenLower = true
-    } else if character.isUppercase, seenLower {
-      return true
-    }
-  }
-  return false
 }

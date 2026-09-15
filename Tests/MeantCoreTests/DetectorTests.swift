@@ -37,7 +37,6 @@ final class DetectorTests: XCTestCase {
     XCTAssertEqual(detector.inspect("ㅋㅋㅋ")?.replacement, "zzz")
     XCTAssertEqual(detector.inspect("ㅎㅎ")?.replacement, "gg")
     XCTAssertEqual(detector.inspect("ㅠㅠ")?.replacement, "bb")
-    XCTAssertNotNil(detector.inspect("asdf"))
   }
 
   func testStaysQuietWhenNeitherSideLooksWrong() {
@@ -67,6 +66,13 @@ final class DetectorTests: XCTestCase {
     XCTAssertNil(detector.inspect("v2"))
     XCTAssertNil(detector.inspect("HELLO"))
     XCTAssertNil(detector.inspect("user@narnia.dev"))
+  }
+
+  func testStaysQuietWhenFlippedHangulIsNotComposed() {
+    XCTAssertEqual(Converter.enToKo("MLOps"), "ㅢㅒㅔㄴ")
+    XCTAssertNil(detector.inspect("MLOps"))
+    XCTAssertNil(detector.inspect("asdf"))
+    XCTAssertNil(Detector.standard.inspect("MLOps"))
   }
 
   func testStandardEnglishListKnowsCommonWords() {
