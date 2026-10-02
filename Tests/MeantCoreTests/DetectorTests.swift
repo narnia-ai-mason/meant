@@ -18,6 +18,9 @@ final class DetectorTests: XCTestCase {
     let withStop = detector.inspect("dkssud.")
     XCTAssertEqual(withStop?.original, "dkssud.")
     XCTAssertEqual(withStop?.replacement, "안녕.")
+    XCTAssertEqual(detector.inspect("dkssud,")?.replacement, "안녕,")
+    XCTAssertEqual(detector.inspect("\"dkssud\"")?.replacement, "\"안녕\"")
+    XCTAssertEqual(detector.inspect("(dkssud)")?.replacement, "(안녕)")
 
     XCTAssertEqual(Converter.enToKo("EjTdmf"), "떴을")
     XCTAssertEqual(detector.inspect("EjTdmf")?.replacement, "떴을")

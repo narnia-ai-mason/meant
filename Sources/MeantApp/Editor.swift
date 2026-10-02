@@ -51,7 +51,7 @@ enum Editor {
     )
   }
 
-  static func substring(_ text: String, _ utf16: Range<Int>) -> String? {
+  nonisolated static func substring(_ text: String, _ utf16: Range<Int>) -> String? {
     let ns = text as NSString
     guard utf16.lowerBound >= 0, utf16.upperBound <= ns.length else {
       return nil
@@ -59,30 +59,46 @@ enum Editor {
     return ns.substring(with: NSRange(location: utf16.lowerBound, length: utf16.count))
   }
 
-  static func replace(in snapshot: Snapshot, utf16: Range<Int>, with replacement: String) -> Bool {
+  static func replace(
+    in snapshot: Snapshot,
+    utf16: Range<Int>?,
+    original: String,
+    with replacement: String
+  ) -> Bool {
     let element = snapshot.element
     var before = readText(from: element)
-    guard var range = clamped(utf16, in: before), var original = substring(before, range) else {
-      return false
+    var range = utf16.flatMap { clamped($0, in: before) }
+    var expected = original
+    if let currentRange = range, let text = substring(before, currentRange), sameForms(text, original) {
+      expected = text
+    } else if let found = CaretToken.locate(
+      original,
+      preferring: range?.lowerBound ?? snapshot.selectedUTF16.upperBound,
+      in: before
+    ) {
+      range = found
+      expected = original
+    } else {
+      range = nil
     }
-    if original.contains(where: isHangulLetter) {
-      let committed = commitHangul(in: element, original: original, range: range)
+    if expected.contains(where: isHangulLetter), let currentRange = range {
+      let committed = commitHangul(in: element, original: expected, range: currentRange)
       before = readText(from: element)
       if let committed, let text = substring(before, committed) {
         range = committed
-        original = text
-      } else if let found = locate(original, preferring: range, in: before) {
+        expected = text
+      } else if let found = CaretToken.locate(expected, preferring: currentRange.lowerBound, in: before) {
         range = found
       }
     }
-    guard selectExactly(element, range: range, expected: original) else {
+    guard selectReplacement(in: element, range: range, expected: expected) else {
       return false
     }
     var pid: pid_t = 0
     let target = AXUIElementGetPid(element, &pid) == .success ? pid : nil
     postKey(CGKeyCode(kVK_Delete), pid: target)
     settle(0.08)
-    let inserted = replacement + trailingSpaces(original)
+    let inserted = replacement + trailingSpaces(expected)
     if isCollapsed(element), insertSelectedText(element, inserted) {
       return true
     }
@@ -96,47 +112,7 @@ private func commitHangul(in element: AXUIElement, original: String, range: Rang
   let target = AXUIElementGetPid(element, &pid) == .success ? pid : nil
   postKey(CGKeyCode(kVK_RightArrow), pid: target)
   settle()
-  if let found = locate(original, preferring: range, in: readText(from: element)) {
-    return found
-  }
-  InputSource.select(.koreanToEnglish)
-  settle()
-  return locate(original, preferring: range, in: readText(from: element))
-}
-
-@MainActor
-private func locate(_ original: String, preferring range: Range<Int>, in text: String) -> Range<Int>? {
-  if Editor.substring(text, range) == original {
-    return range
-  }
-  let ns = text as NSString
-  let needle = original as NSString
-  guard needle.length > 0, ns.length >= needle.length else {
-    return nil
-  }
-  var search = NSRange(location: 0, length: ns.length)
-  var best: NSRange?
-  while true {
-    let found = ns.range(of: original, options: [], range: search)
-    guard found.location != NSNotFound else {
-      break
-    }
-    if found.location == range.lowerBound {
-      return found.location..<(found.location + found.length)
-    }
-    if best == nil || abs(found.location - range.lowerBound) < abs(best!.location - range.lowerBound) {
-      best = found
-    }
-    let next = found.location + max(found.length, 1)
-    guard next < ns.length else {
-      break
-    }
-    search = NSRange(location: next, length: ns.length - next)
-  }
-  guard let best else {
-    return nil
-  }
-  return best.location..<(best.location + best.length)
+  return CaretToken.locate(original, preferring: range.lowerBound, in: readText(from: element))
 }
 
 private func isHangulLetter(_ character: Character) -> Bool {
@@ -147,6 +123,40 @@ private func isHangulLetter(_ character: Character) -> Bool {
   }
 }
 
+private func selectReplacement(in element: AXUIElement, range: Range<Int>?, expected: String) -> Bool {
+  if selectBackward(in: element, expected: expected) {
+    return true
+  }
+  collapseSelection(in: element)
+  guard let range else {
+    return false
+  }
+  return selectExactly(element, range: range, expected: expected)
+}
+
+private func selectBackward(in element: AXUIElement, expected: String) -> Bool {
+  let count = expected.count
+  guard count > 0 else {
+    return false
+  }
+  var pid: pid_t = 0
+  let target = AXUIElementGetPid(element, &pid) == .success ? pid : nil
+  for _ in 0..<count {
+    postKey(CGKeyCode(kVK_LeftArrow), pid: target, flags: .maskShift, hid: true)
+    settle(0.008)
+  }
+  settle()
+  return selectionMatches(element, expected: expected)
+}
+
+private func collapseSelection(in element: AXUIElement) {
+  guard let selected = selectedUTF16Range(element), selected.count > 0 else {
+    return
+  }
+  _ = setSelectedRange(element, selected.upperBound..<selected.upperBound)
+  settle()
+}
+
 private func selectExactly(_ element: AXUIElement, range: Range<Int>, expected: String) -> Bool {
   guard setSelectedRange(element, range) else {
     return false
@@ -155,10 +165,20 @@ private func selectExactly(_ element: AXUIElement, range: Range<Int>, expected: 
   guard selectedUTF16Range(element) == range else {
     return false
   }
-  if let selected = copyString(element, kAXSelectedTextAttribute), selected != expected {
+  return selectionMatches(element, expected: expected)
+}
+
+private func selectionMatches(_ element: AXUIElement, expected: String) -> Bool {
+  if let selected = copyString(element, kAXSelectedTextAttribute), !selected.isEmpty {
+    return sameForms(selected, expected)
+  }
+  guard let range = selectedUTF16Range(element), range.count > 0 else {
     return false
   }
-  return true
+  if let text = Editor.substring(readText(from: element), range) {
+    return sameForms(text, expected)
+  }
+  return range.count == (expected as NSString).length
 }
 
 private func trailingSpaces(_ text: String) -> String {
@@ -214,11 +234,19 @@ private func setSelectedText(_ element: AXUIElement, _ text: String) -> Bool {
 
 private func containsLiteral(_ haystack: String, _ needle: String) -> Bool {
   let ns = haystack as NSString
-  return [
-    needle,
-    needle.precomposedStringWithCanonicalMapping,
-    needle.decomposedStringWithCanonicalMapping,
-  ].contains { ns.range(of: $0).location != NSNotFound }
+  return forms(needle).contains { ns.range(of: $0).location != NSNotFound }
+}
+
+private func sameForms(_ left: String, _ right: String) -> Bool {
+  forms(left).contains { candidate in
+    forms(right).contains { $0 == candidate }
+  }
+}
+
+private func forms(_ text: String) -> [String] {
+  var seen = Set<String>()
+  return [text, text.precomposedStringWithCanonicalMapping, text.decomposedStringWithCanonicalMapping]
+    .filter { seen.insert($0).inserted }
 }
 
 private func paste(_ text: String) -> Bool {
@@ -227,6 +255,7 @@ private func paste(_ text: String) -> Bool {
   pasteboard.clearContents()
   pasteboard.setString(text, forType: .string)
   postCommandV()
+  settle(0.12)
   DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
     pasteboard.clearContents()
     if let previous {
@@ -257,16 +286,19 @@ private func postCommandV() {
 private func postKey(
   _ key: CGKeyCode,
   pid: pid_t?,
-  flags: CGEventFlags = []
+  flags: CGEventFlags = [],
+  hid: Bool = false
 ) {
-  let source = CGEventSource(stateID: .privateState)
+  let source = CGEventSource(stateID: hid ? .hidSystemState : .privateState)
   func post(_ down: Bool) {
     guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else {
       return
     }
     event.flags = flags
     event.setIntegerValueField(.eventSourceUserData, value: MeantEvent.signature)
-    if let pid {
+    if hid {
+      event.post(tap: .cghidEventTap)
+    } else if let pid {
       event.postToPid(pid)
     } else {
       event.post(tap: .cghidEventTap)
@@ -277,8 +309,11 @@ private func postKey(
 }
 
 private func readText(from element: AXUIElement) -> String {
-  if let value = copyString(element, kAXValueAttribute) {
+  if let value = copyString(element, kAXValueAttribute), !value.isEmpty {
     return value
+  }
+  if let children = joinedChildren(element), !children.isEmpty {
+    return children
   }
   let selectedRange = selectedUTF16Range(element)
   var current = copyElement(element, kAXParentAttribute)
@@ -287,16 +322,46 @@ private func readText(from element: AXUIElement) -> String {
       break
     }
     if let value = copyString(node, kAXValueAttribute), !value.isEmpty {
-      if let selectedRange, selectedRange.upperBound <= (value as NSString).length {
-        return value
-      }
-      if selectedRange == nil {
+      if isPlausibleParentText(value, selected: selectedRange) {
         return value
       }
     }
     current = copyElement(node, kAXParentAttribute)
   }
   return copyString(element, kAXSelectedTextAttribute) ?? ""
+}
+
+private func joinedChildren(_ element: AXUIElement) -> String? {
+  var value: CFTypeRef?
+  guard
+    AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &value) == .success,
+    let children = value as? [AXUIElement],
+    !children.isEmpty
+  else {
+    return nil
+  }
+  var parts: [String] = []
+  parts.reserveCapacity(min(children.count, 40))
+  for child in children.prefix(40) {
+    if let text = copyString(child, kAXValueAttribute), !text.isEmpty {
+      parts.append(text)
+    } else {
+      parts.append("\u{FFFC}")
+    }
+  }
+  let joined = parts.joined()
+  return joined.contains(where: { $0 != "\u{FFFC}" }) ? joined : nil
+}
+
+private func isPlausibleParentText(_ value: String, selected: Range<Int>?) -> Bool {
+  let length = (value as NSString).length
+  guard let selected else {
+    return length > 0 && length < 400
+  }
+  guard selected.upperBound <= length else {
+    return false
+  }
+  return length - selected.upperBound <= 2
 }
 
 private func copyElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {

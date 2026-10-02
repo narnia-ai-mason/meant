@@ -80,7 +80,7 @@ struct SettingsView: View {
       } header: {
         Text("Permissions")
       } footer: {
-        Text("Accessibility replaces the word. Input Monitoring watches Space.")
+        Text("Accessibility replaces the word. Input Monitoring watches Space and punctuation.")
       }
     }
     .formStyle(.grouped)

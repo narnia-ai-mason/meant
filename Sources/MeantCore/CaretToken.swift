@@ -19,12 +19,25 @@ public enum CaretToken {
       }
     }
     var start = end
+    var kind: LetterKind?
     while start > 0 {
       let unit = ns.substring(with: NSRange(location: start - 1, length: 1))
-      if isWhitespace(unit) {
+      if isBoundary(unit) {
         break
       }
-      start -= 1
+      if let unitKind = letterKind(unit) {
+        if let kind, unitKind != kind {
+          break
+        }
+        kind = unitKind
+        start -= 1
+        continue
+      }
+      if kind == nil {
+        start -= 1
+        continue
+      }
+      break
     }
     guard start < end else {
       return nil
@@ -50,6 +63,66 @@ public enum CaretToken {
       }
     }
     return token.lowerBound..<end
+  }
+
+  public static func locate(
+    _ original: String,
+    preferring location: Int,
+    in text: String
+  ) -> Range<Int>? {
+    let ns = text as NSString
+    let needle = original as NSString
+    guard needle.length > 0, ns.length >= needle.length else {
+      return nil
+    }
+    var search = NSRange(location: 0, length: ns.length)
+    var best: NSRange?
+    while true {
+      let found = ns.range(of: original, options: [], range: search)
+      guard found.location != NSNotFound else {
+        break
+      }
+      if found.location == location {
+        return found.location..<(found.location + found.length)
+      }
+      if best == nil || abs(found.location - location) < abs(best!.location - location) {
+        best = found
+      }
+      let next = found.location + max(found.length, 1)
+      guard next < ns.length else {
+        break
+      }
+      search = NSRange(location: next, length: ns.length - next)
+    }
+    guard let best else {
+      return nil
+    }
+    return best.location..<(best.location + best.length)
+  }
+
+  private enum LetterKind {
+    case latin
+    case hangul
+  }
+
+  private static func letterKind(_ unit: String) -> LetterKind? {
+    guard let character = unit.first else {
+      return nil
+    }
+    if Hangul.isLetter(character) {
+      return .hangul
+    }
+    if character.isASCII, character.isLetter {
+      return .latin
+    }
+    return nil
+  }
+
+  private static func isBoundary(_ unit: String) -> Bool {
+    if isWhitespace(unit) {
+      return true
+    }
+    return unit == "\u{FFFC}"
   }
 
   private static func isWhitespace(_ unit: String) -> Bool {
