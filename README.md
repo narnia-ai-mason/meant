@@ -32,3 +32,7 @@ Enter로 바꿉니다. 입력기도 같이 넘어갑니다. Tab은 이번과 다
 바로 바꾸고 싶으면 **⌃⌘M**을 누르세요. 단축키는 Settings에서 바꿀 수 있습니다.
 
 제안이 계속 거슬리면 Tab으로 넘겨 두세요. Settings의 **Ignore**에도 직접 넣을 수 있습니다.
+
+## 블로그 
+
+[mbaicagn](https://mbaicagn.pages.dev/)
