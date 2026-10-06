@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MeantCore
 
@@ -14,6 +15,7 @@ final class AppModel {
     var range: Range<Int>?
     var original: String
     var suggestion: Suggestion
+    var trigger: String?
   }
 
   func start() {
@@ -26,8 +28,8 @@ final class AppModel {
     space.isHUDVisible = { [weak self] in
       self?.hud.isVisible ?? false
     }
-    space.onSpace = { [weak self] typed in
-      self?.handleSpace(typed: typed)
+    space.onSpace = { [weak self] typed, trigger in
+      self?.handleSpace(typed: typed, trigger: trigger)
     }
     space.onOtherKey = { [weak self] in
       self?.hud.hide()
@@ -42,6 +44,7 @@ final class AppModel {
       self?.hud.handle(.ignore)
     }
     space.start()
+    NeovimGuard.shared.start()
     HotKeyMonitor.shared.onFlip = { [weak self] in
       self?.handleHotkey()
     }
@@ -62,7 +65,7 @@ final class AppModel {
     space.start()
   }
 
-  private func handleSpace(typed: String) {
+  private func handleSpace(typed: String, trigger: String) {
     if hud.isVisible {
       hud.hide()
       return
@@ -87,7 +90,8 @@ final class AppModel {
       snapshot: snapshot,
       range: target.range,
       original: target.original,
-      suggestion: target.suggestion
+      suggestion: target.suggestion,
+      trigger: trigger
     )
     pending = captured
     hud.show(
@@ -127,12 +131,16 @@ final class AppModel {
         snapshot: snapshot,
         range: target.range,
         original: target.original,
-        suggestion: target.suggestion
+        suggestion: target.suggestion,
+        trigger: nil
       )
     )
   }
 
   private func apply(_ pending: Pending) {
+    if replaceInNeovim(pending) {
+      return
+    }
     let live = Editor.read() ?? pending.snapshot
     let original = pending.original
     let rangeToReplace: Range<Int>?
@@ -167,13 +175,38 @@ final class AppModel {
         in: live,
         utf16: rangeToReplace,
         original: original,
-        with: pending.suggestion.replacement
+        with: pending.suggestion.replacement,
+        trigger: pending.trigger
       )
     else {
       return
     }
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     InputSource.select(pending.suggestion.direction)
+  }
+
+  private func replaceInNeovim(_ pending: Pending) -> Bool {
+    guard
+      let app = NSWorkspace.shared.frontmostApplication,
+      TerminalApps.matches(app.bundleIdentifier)
+    else { return false }
+    switch Neovim.apply(
+      typed: pending.suggestion.original,
+      replacement: pending.suggestion.replacement,
+      trigger: pending.trigger,
+      screen: Editor.read()?.text,
+      appPID: app.processIdentifier,
+      bundlePath: app.bundleURL?.path
+    ) {
+    case .replaced:
+      RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+      InputSource.select(pending.suggestion.direction)
+      return true
+    case .skipped:
+      return true
+    case .unavailable:
+      return false
+    }
   }
 
   private func resolve(

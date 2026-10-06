@@ -63,9 +63,13 @@ enum Editor {
     in snapshot: Snapshot,
     utf16: Range<Int>?,
     original: String,
-    with replacement: String
+    with replacement: String,
+    trigger: String? = nil
   ) -> Bool {
     let element = snapshot.element
+    if isTerminal(element) {
+      return replaceInTerminal(replacement: replacement, trigger: trigger)
+    }
     var before = readText(from: element)
     var range = utf16.flatMap { clamped($0, in: before) }
     var expected = original
@@ -201,6 +205,32 @@ private func clamped(_ utf16: Range<Int>, in text: String) -> Range<Int>? {
     return nil
   }
   return utf16
+}
+
+private func isTerminal(_ element: AXUIElement) -> Bool {
+  var pid: pid_t = 0
+  guard AXUIElementGetPid(element, &pid) == .success else {
+    return false
+  }
+  return TerminalApps.matches(NSRunningApplication(processIdentifier: pid)?.bundleIdentifier)
+}
+
+private func replaceInTerminal(replacement: String, trigger: String?) -> Bool {
+  let plan = TerminalReplacement.keystrokes(replacement: replacement, trigger: trigger)
+  // Let the confirming key finish before editing, or the first edit is swallowed.
+  settle(0.06)
+  if plan.deleteTrigger {
+    postKey(CGKeyCode(kVK_Delete), pid: nil, hid: true)
+    settle(0.03)
+  }
+  if plan.killWord {
+    postKey(CGKeyCode(kVK_ANSI_W), pid: nil, flags: .maskControl, hid: true)
+    settle(0.05)
+  }
+  guard !plan.insert.isEmpty else {
+    return plan.deleteTrigger || plan.killWord
+  }
+  return paste(plan.insert)
 }
 
 private func settle(_ seconds: TimeInterval = 0.03) {

@@ -4,7 +4,7 @@ import Foundation
 import MeantCore
 
 final class SpaceMonitor: @unchecked Sendable {
-  var onSpace: (@MainActor (_ typed: String) -> Void)?
+  var onSpace: (@MainActor (_ typed: String, _ trigger: String) -> Void)?
   var onOtherKey: (@MainActor () -> Void)?
   var onHUDCommit: (@MainActor () -> Void)?
   var onHUDCancel: (@MainActor () -> Void)?
@@ -38,7 +38,9 @@ final class SpaceMonitor: @unchecked Sendable {
     guard
       let tap = CGEvent.tapCreate(
         tap: .cgSessionEventTap,
-        place: .headInsertEventTap,
+        // Tail, so a Korean input method has already written its characters and nvim's
+        // command-mode guard can put the physical ASCII key back.
+        place: .tailAppendEventTap,
         options: .defaultTap,
         eventsOfInterest: mask,
         callback: { _, type, event, refcon in
@@ -104,9 +106,6 @@ final class SpaceMonitor: @unchecked Sendable {
     let hasShift = flags.contains(.maskShift)
     let isShortcut = flags.contains(.maskCommand) || flags.contains(.maskControl)
     let isPlainSpace = code == Int64(kVK_Space) && !hasCommandish && !hasShift
-    let unicode = unicodeString(from: event)
-    let isDelimiter = !isShortcut && WordEnd.isDelimiter(unicode)
-    let asciiLayout = InputSource.isASCIILayout
 
     if hudVisible, isHUDKey(code) {
       if hasCommandish || hasShift {
@@ -126,6 +125,11 @@ final class SpaceMonitor: @unchecked Sendable {
       }
       return true
     }
+
+    NeovimGuard.shared.adjust(event)
+    let unicode = unicodeString(from: event)
+    let isDelimiter = !isShortcut && WordEnd.isDelimiter(unicode)
+    let asciiLayout = InputSource.isASCIILayout
 
     DispatchQueue.main.async { [weak self] in
       self?.dispatchOnMain(
@@ -158,7 +162,7 @@ final class SpaceMonitor: @unchecked Sendable {
         onOtherKey?()
         return
       }
-      scheduleInspect()
+      scheduleInspect(trigger: " ")
       return
     }
     if isDelimiter {
@@ -174,7 +178,7 @@ final class SpaceMonitor: @unchecked Sendable {
         return
       }
       if hadWord {
-        scheduleInspect()
+        scheduleInspect(trigger: unicode)
       }
       return
     }
@@ -196,12 +200,12 @@ final class SpaceMonitor: @unchecked Sendable {
   }
 
   @MainActor
-  private func scheduleInspect() {
+  private func scheduleInspect(trigger: String) {
     inspectWork?.cancel()
     let word = lastWord
     let work = DispatchWorkItem { [onSpace] in
       Task { @MainActor in
-        onSpace?(word)
+        onSpace?(word, trigger)
       }
     }
     inspectWork = work

@@ -3,6 +3,11 @@ import CoreGraphics
 import Foundation
 import MeantCore
 
+private final class ParkedInput: @unchecked Sendable {
+  let lock = NSLock()
+  var id: String?
+}
+
 enum InputSource {
   static var isASCIILayout: Bool {
     !isInputMethod(TISCopyCurrentKeyboardInputSource().takeRetainedValue())
@@ -27,6 +32,37 @@ enum InputSource {
       return
     }
     activate(chosen)
+  }
+
+  static var isParked: Bool {
+    parked.lock.lock()
+    defer { parked.lock.unlock() }
+    return parked.id != nil
+  }
+
+  /// Remember a Korean (or other) input method and switch to English for nvim command modes.
+  static func parkNonASCIIForCommands() {
+    guard !isASCIILayout, let id = currentID() else { return }
+    parked.lock.lock()
+    if parked.id == nil { parked.id = id }
+    parked.lock.unlock()
+    select(.koreanToEnglish)
+  }
+
+  static func restoreParkedInput() {
+    parked.lock.lock()
+    let id = parked.id
+    parked.id = nil
+    parked.lock.unlock()
+    guard let id else { return }
+    guard let source = keyboardSources().first(where: { $0.id == id })?.source else { return }
+    activate(source)
+  }
+
+  private static let parked = ParkedInput()
+
+  private static func currentID() -> String? {
+    string(TISCopyCurrentKeyboardInputSource().takeRetainedValue(), kTISPropertyInputSourceID)
   }
 
   private static func activate(_ source: TISInputSource) {
