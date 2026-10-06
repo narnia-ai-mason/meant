@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
 import Foundation
@@ -64,8 +65,9 @@ final class NeovimGuard: @unchecked Sendable {
     }
     let pid = app.processIdentifier
     let bundlePath = app.bundleURL?.path
+    let surface = focusedSurface(pid: pid)
     DispatchQueue.global(qos: .utility).async { [weak self] in
-      let mode = Neovim.mode(appPID: pid, bundlePath: bundlePath)
+      let mode = Neovim.mode(appPID: pid, bundlePath: bundlePath, screen: surface.text, title: surface.title)
       DispatchQueue.main.async {
         self?.finish(token: token!, mode: mode)
       }
@@ -83,8 +85,9 @@ final class NeovimGuard: @unchecked Sendable {
     }
     let pid = app.processIdentifier
     let bundlePath = app.bundleURL?.path
+    let surface = focusedSurface(pid: pid)
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let mode = Neovim.mode(appPID: pid, bundlePath: bundlePath)
+      let mode = Neovim.mode(appPID: pid, bundlePath: bundlePath, screen: surface.text, title: surface.title)
       DispatchQueue.main.async {
         self?.finish(token: token, mode: mode)
       }
@@ -99,8 +102,11 @@ final class NeovimGuard: @unchecked Sendable {
     else { return }
     let pid = app.processIdentifier
     let bundlePath = app.bundleURL?.path
+    let surface = focusedSurface(pid: pid)
     DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-      let mode = Neovim.mode(appPID: pid, bundlePath: bundlePath)
+      let mode = Neovim.mode(
+        appPID: pid, bundlePath: bundlePath, screen: surface.text, title: surface.title
+      )
       DispatchQueue.main.async {
         guard let mode, NeovimMode.isTyping(mode) else { return }
         self?.note(mode)
@@ -193,6 +199,33 @@ final class NeovimGuard: @unchecked Sendable {
       return false
     }
   }
+}
+
+private struct Surface {
+  var text: String
+  var title: String
+}
+
+private func focusedSurface(pid: pid_t) -> Surface {
+  let application = AXUIElementCreateApplication(pid)
+  let window = copyElement(application, kAXFocusedWindowAttribute as String)
+  let focused = copyElement(application, kAXFocusedUIElementAttribute as String)
+  return Surface(
+    text: focused.flatMap { copyString($0, kAXValueAttribute as String) } ?? "",
+    title: window.flatMap { copyString($0, kAXTitleAttribute as String) } ?? ""
+  )
+}
+
+private func copyElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+  return (value as! AXUIElement)
+}
+
+private func copyString(_ element: AXUIElement, _ attribute: String) -> String? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+  return value as? String
 }
 
 private struct Cache {

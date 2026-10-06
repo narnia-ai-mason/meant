@@ -11,8 +11,17 @@ enum NeovimApplyResult {
 /// The nvim the person is typing in, found the way emote finds it: the socket under
 /// `$TMPDIR/nvim.<user>/`, limited to processes under the frontmost terminal.
 enum Neovim {
-  static func mode(appPID: pid_t, bundlePath: String?) -> String? {
-    target(appPID: appPID, bundlePath: bundlePath, screen: nil, timeout: 0.08, distinct: true)?.state.mode
+  /// The mode of the nvim on the focused terminal surface. Nil when that surface is something else.
+  static func mode(appPID: pid_t, bundlePath: String?, screen: String, title: String) -> String? {
+    guard !screen.isEmpty || !title.isEmpty else { return nil }
+    return target(
+      appPID: appPID,
+      bundlePath: bundlePath,
+      screen: screen,
+      timeout: 0.08,
+      distinct: true,
+      requireVisibleOn: (screen, title)
+    )?.state.mode
   }
 
   static func apply(
@@ -23,7 +32,9 @@ enum Neovim {
     appPID: pid_t,
     bundlePath: String?
   ) -> NeovimApplyResult {
-    guard var found = target(appPID: appPID, bundlePath: bundlePath, screen: screen, timeout: 0.4, distinct: false) else {
+    guard var found = target(
+      appPID: appPID, bundlePath: bundlePath, screen: screen, timeout: 0.4, distinct: false, requireVisibleOn: nil
+    ) else {
       return .unavailable
     }
     if !NeovimMode.isTyping(found.state.mode) {
@@ -36,7 +47,9 @@ enum Neovim {
     if !InputSource.isASCIILayout {
       InputSource.select(.koreanToEnglish)
       RunLoop.current.run(until: Date().addingTimeInterval(0.08))
-      guard let refreshed = target(appPID: appPID, bundlePath: bundlePath, screen: screen, timeout: 0.4, distinct: false) else {
+      guard let refreshed = target(
+        appPID: appPID, bundlePath: bundlePath, screen: screen, timeout: 0.4, distinct: false, requireVisibleOn: nil
+      ) else {
         return .unavailable
       }
       found = refreshed
@@ -77,6 +90,8 @@ enum Neovim {
     var col: Int
     var seen: Double?
     var focused: Bool?
+    var nearby: [String]?
+    var filename: String?
   }
 
   private static func target(
@@ -84,7 +99,8 @@ enum Neovim {
     bundlePath: String?,
     screen: String?,
     timeout: TimeInterval,
-    distinct: Bool
+    distinct: Bool,
+    requireVisibleOn surface: (screen: String, title: String)?
   ) -> Target? {
     let all = instances()
     var candidates = all.filter { runs(under: appPID, bundlePath: bundlePath, pid: $0.pid) }
@@ -103,6 +119,17 @@ enum Neovim {
     targets.removeAll { $0.state.focused == false }
     if targets.contains(where: { $0.state.focused == true }) {
       targets.removeAll { $0.state.focused != true }
+    }
+    if let surface {
+      targets = targets.filter {
+        NeovimVisibility.isOnScreen(
+          lines: [$0.state.line] + ($0.state.nearby ?? []),
+          filename: $0.state.filename ?? "",
+          screen: surface.screen,
+          title: surface.title
+        )
+      }
+      guard !targets.isEmpty else { return nil }
     }
     if let screen, !screen.isEmpty {
       let shown = targets.filter { isShown($0.state.line, on: screen) }
@@ -221,6 +248,8 @@ enum Neovim {
       buffer = api.nvim_get_current_buf(), tick = api.nvim_buf_get_changedtick(0),
       editable = vim.bo.modifiable and vim.bo.buftype == '',
       line = api.nvim_get_current_line(), row = cursor[1], col = cursor[2],
+      nearby = api.nvim_buf_get_lines(0, math.max(0, cursor[1] - 3), math.min(api.nvim_buf_line_count(0), cursor[1] + 2), false),
+      filename = vim.fn.expand('%:t'),
       seen = vim.g.meant_seen, focused = vim.g.meant_focused,
     })
     """

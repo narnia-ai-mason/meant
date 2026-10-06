@@ -34,6 +34,21 @@ public struct NeovimEdit: Equatable, Sendable {
   }
 }
 
+public enum NeovimVisibility {
+  /// True only when this nvim's buffer is what the terminal is showing.
+  /// Another program in the same app, such as Claude Code, does not match.
+  public static func isOnScreen(lines: [String], filename: String, screen: String, title: String) -> Bool {
+    let samples = lines
+      .map { String($0.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24)) }
+      .filter { $0.count >= 6 }
+    if !screen.isEmpty, samples.contains(where: { screen.contains($0) }) {
+      return true
+    }
+    let name = filename.trimmingCharacters(in: .whitespacesAndNewlines)
+    return name.count >= 4 && !title.isEmpty && title.localizedCaseInsensitiveContains(name)
+  }
+}
+
 public enum NeovimEditPlan {
   /// The cursor is the byte column nvim reports. `typed` is the word meant recognized,
   /// without relying on the terminal's accessibility caret.

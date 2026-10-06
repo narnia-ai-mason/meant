@@ -24,6 +24,52 @@ final class NeovimModeTests: XCTestCase {
   }
 }
 
+final class NeovimVisibilityTests: XCTestCase {
+  func testMatchesTheBufferOnScreen() {
+    XCTAssertTrue(
+      NeovimVisibility.isOnScreen(
+        lines: ["local function meant()"],
+        filename: "Neovim.swift",
+        screen: "local function meant()\n  return true",
+        title: "Otty"
+      )
+    )
+  }
+
+  func testLeavesAnotherProgramAlone() {
+    XCTAssertFalse(
+      NeovimVisibility.isOnScreen(
+        lines: ["local function meant()"],
+        filename: "Neovim.swift",
+        screen: "I'll update the terminal support next.",
+        title: "claude"
+      )
+    )
+  }
+
+  func testEmptySurfaceIsNotNeovim() {
+    XCTAssertFalse(
+      NeovimVisibility.isOnScreen(
+        lines: ["local function meant()"],
+        filename: "Neovim.swift",
+        screen: "",
+        title: ""
+      )
+    )
+  }
+
+  func testFilenameInTheWindowTitleCounts() {
+    XCTAssertTrue(
+      NeovimVisibility.isOnScreen(
+        lines: [""],
+        filename: "Neovim.swift",
+        screen: "",
+        title: "Neovim.swift — nvim"
+      )
+    )
+  }
+}
+
 final class NeovimEditPlanTests: XCTestCase {
   func testSpaceTriggerReplacesTheWordAndKeepsTheSpace() {
     let line = "echo dkssud "
